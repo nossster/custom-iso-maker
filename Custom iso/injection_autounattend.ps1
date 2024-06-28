@@ -17,53 +17,94 @@ if ($isoFile -eq $null) {
 
 # Path to oscdimg.exe
 $oscdimg = Join-Path -Path $scriptDir -ChildPath "oscdimg.exe"
+if (-Not (Test-Path $oscdimg)) {
+    Write-Error "oscdimg.exe not found in directory $scriptDir"
+    exit 1
+}
 
 # Temporary folder for mounting the ISO image
-$tempMountDir = "$env:TEMP\ISOMount"
+$tempMountDir = Join-Path -Path $scriptDir -ChildPath "temp_iso"
 
 # Mount the ISO image
 Write-Output "Mounting ISO image..."
 Mount-DiskImage -ImagePath $isoFile.FullName
+if ($?) {
+    Write-Output "ISO image mounted successfully."
+} else {
+    Write-Error "Failed to mount ISO image."
+    exit 1
+}
 $diskImage = Get-DiskImage -ImagePath $isoFile.FullName
 $volumes = Get-Volume -DiskImage $diskImage
 
 # Create a temporary folder
 Write-Output "Creating temporary folder..."
 New-Item -ItemType Directory -Path $tempMountDir -Force
+if ($?) {
+    Write-Output "Temporary folder created successfully."
+} else {
+    Write-Error "Failed to create temporary folder."
+    exit 1
+}
 
 # Copy files from the ISO to the temporary folder
 Write-Output "Copying files from ISO image to temporary folder..."
 $volumeLetter = $volumes.DriveLetter + ":"
-$files = Get-ChildItem -Path "$volumeLetter\*" -Recurse
+$files = Get-ChildItem -Path "$volumeLetter\\*" -Recurse
 $totalFiles = $files.Count
 $currentFile = 0
 
 foreach ($file in $files) {
     $destPath = Join-Path -Path $tempMountDir -ChildPath ($file.FullName.Substring(3))
     Copy-Item -Path $file.FullName -Destination $destPath -Force
-    $currentFile++
-    Write-Progress -Activity "Copying files" -Status "$currentFile of $totalFiles files copied" -PercentComplete (($currentFile / $totalFiles) * 100)
+    if ($?) {
+        $currentFile++
+        Write-Progress -Activity "Copying files" -Status "$currentFile of $totalFiles files copied" -PercentComplete (($currentFile / $totalFiles) * 100)
+    } else {
+        Write-Error "Failed to copy file: $file.FullName"
+    }
 }
 
 # Add the XML file to the temporary folder
 Write-Output "Adding XML file to temporary folder..."
 Copy-Item -Path $xmlFile.FullName -Destination $tempMountDir
+if ($?) {
+    Write-Output "XML file added successfully."
+} else {
+    Write-Error "Failed to add XML file."
+    exit 1
+}
 
 # Dismount the ISO image
 Write-Output "Dismounting ISO image..."
 Dismount-DiskImage -ImagePath $isoFile.FullName
+if ($?) {
+    Write-Output "ISO image dismounted successfully."
+} else {
+    Write-Error "Failed to dismount ISO image."
+    exit 1
+}
 
 # Create a new ISO image with the added XML file
 $newIsoFileName = "custom_" + $isoFile.Name
 $newIsoFilePath = Join-Path -Path $scriptDir -ChildPath $newIsoFileName
 $isoLabel = "IMAGE_LABEL"
 Write-Output "Creating new ISO image with the added XML file..."
-$cdImageCmd = "& `"$oscdimg`" -n -m -o -l$isoLabel `"$tempMountDir`" `"$newIsoFilePath`""
 
-Invoke-Expression -Command $cdImageCmd
+$cdImageArgs = "-bootdata:2#p0,e,b`"$tempMountDir\\boot\\etfsboot.com`"#pEF,e,b`"$tempMountDir\\efi\\microsoft\\boot\\efisys.bin`" -u1 -udfver102 -l$isoLabel `"$tempMountDir`" `"$newIsoFilePath`""
+Start-Process -FilePath $oscdimg -ArgumentList $cdImageArgs -Wait -NoNewWindow
+if ($?) {
+    Write-Output "ISO file created successfully. New ISO file: $newIsoFilePath"
+} else {
+    Write-Error "Failed to create ISO file."
+    exit 1
+}
 
 # Remove the temporary folder
 Write-Output "Removing temporary folder..."
 Remove-Item -Path $tempMountDir -Recurse -Force
-
-Write-Output "ISO file successfully updated. New ISO file: $newIsoFilePath"
+if ($?) {
+    Write-Output "Temporary folder removed successfully."
+} else {
+    Write-Error "Failed to remove temporary folder."
+}
